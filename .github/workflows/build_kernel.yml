@@ -1,0 +1,100 @@
+name: Build AK3 Kernel Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_device:
+        description: 'Target device (如 lmi, umi, all)'
+        required: true
+        default: 'lmi'
+        type: choice
+        options:
+          - 'umi'
+          - 'cmi'
+          - 'cas'
+          - 'thyme'
+          - 'munch'
+          - 'dagu'
+          - 'elish'
+          - 'enuma'
+          - 'alioth'
+          - 'apollo'
+          - 'lmi'
+          - 'psyche'
+          - 'pipa'
+          - 'all'
+      kernelsu:
+        description: '是否集成KernelSU'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      PROTON_CLANG_PATH: ${{ github.workspace }}/proton-clang/proton-clang-20210522/bin
+      CCACHE_DIR: $HOME/.cache/ccache_mikernel
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential git curl wget bison flex zip bc cpio libssl-dev ccache python-is-python3
+
+      - name: Prepare ccache
+        run: |
+          mkdir -p $HOME/.cache/ccache_mikernel
+          ccache --max-size=4G
+          ccache --zero-stats
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache_mikernel
+          key: ccache-${{ github.sha }}
+          restore-keys: |
+            ccache-
+
+      - name: Download Proton Clang toolchain
+        run: |
+          mkdir -p proton-clang
+          cd proton-clang
+          wget https://github.com/kdrag0n/proton-clang/archive/refs/tags/20210522.zip
+          unzip 20210522.zip
+          cd ..
+
+      - name: Set up toolchain path
+        run: |
+          echo "export PATH=${PROTON_CLANG_PATH}:\$PATH" >> $GITHUB_ENV
+
+      - name: Build Kernel
+        run: |
+          ls -al
+          echo "CCACHE_DIR=$CCACHE_DIR"
+          if [ "${{ github.event.inputs.target_device }}" = "all" ]; then
+            bash buildall.sh $([ "${{ github.event.inputs.kernelsu }}" = "true" ] && echo "ksu")
+          else
+            bash build.sh ${{ github.event.inputs.target_device }} $([ "${{ github.event.inputs.kernelsu }}" = "true" ] && echo "ksu")
+          fi
+
+      - name: Prepare AK3 package
+        run: |
+          mkdir -p ak3_out
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ak3
+          # 假设build.sh输出Image在out/arch/arm64/boot/Image
+          cp out/arch/arm64/boot/Image ak3/
+          cd ak3
+          zip -r ../ak3_out/${{ github.event.inputs.target_device }}-kernel-ak3-$(date +%Y%m%d).zip .
+          cd ..
+
+      - name: Upload AK3 kernel zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.target_device }}-kernel-ak3
+          path: ak3_out/*.zip
