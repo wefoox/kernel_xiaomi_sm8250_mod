@@ -64,22 +64,21 @@ jobs:
       - name: Build kernel (AOSP+MIUI)
         env:
           CCACHE_DIR: $HOME/.cache/ccache_mikernel
+          TOOLCHAIN_PATH: $HOME/proton-clang/proton-clang-20210522/bin
         run: |
           set -e
           chmod +x build.sh
-
-          # 先清理历史产物
-          rm -rf out/ anykernel/ *.zip
-
-          # 构建参数
+      
           DEVICE="${{ github.event.inputs.device }}"
           KSU="${{ github.event.inputs.kernelsu }}"
-          # 调用脚本。第二参数填写 ksu 启用 KernelSU
+      
+          # 临时加PATH，仅在build.sh调用时生效
           if [ -z "$KSU" ]; then
-            bash build.sh "$DEVICE"
+            PATH="$TOOLCHAIN_PATH:$PATH" bash build.sh "$DEVICE"
           else
-            bash build.sh "$DEVICE" ksu
+            PATH="$TOOLCHAIN_PATH:$PATH" bash build.sh "$DEVICE" ksu
           fi
+
 
       - name: List output
         run: ls -lh *.zip || true
