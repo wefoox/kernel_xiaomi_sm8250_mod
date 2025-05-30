@@ -87,13 +87,27 @@ jobs:
           unzip 20210522.zip
           echo "✅ Proton Clang toolchain download complete."
 
+      - name: 🔍 Verify Proton Clang toolchain
+        run: |
+          if [ ! -d "$HOME/proton-clang/proton-clang-20210522/bin" ]; then
+            echo "❌ Proton Clang toolchain path does not exist."
+            exit 1
+          else
+            echo "✅ Proton Clang toolchain verified successfully."
+          fi
+
   build:
     needs: prepare
     runs-on: ubuntu-latest
-    env:
-      TOOLCHAIN_PATH: $HOME/proton-clang/proton-clang-20210522/bin
-
     steps:
+      - name: 📥 Restore toolchain cache
+        uses: actions/cache@v3
+        with:
+          path: $HOME/proton-clang
+          key: toolchain-proton-clang
+          restore-keys: |
+            toolchain-
+            
       - name: 🚀 Maximize build space (最大化构建空间)
         uses: easimon/maximize-build-space@master
         with:
@@ -121,9 +135,9 @@ jobs:
           SYSTEM="${{ github.event.inputs.compiled_system }}"
           
           if [ "$KERNELSU_ENABLED" == "Yes" ]; then
-            bash build.sh $TARGET_DEVICE ksu
+            TOOLCHAIN_PATH=$HOME/proton-clang/proton-clang-20210522/bin bash build.sh $TARGET_DEVICE ksu
           else
-            bash build.sh $TARGET_DEVICE
+            TOOLCHAIN_PATH=$HOME/proton-clang/proton-clang-20210522/bin bash build.sh $TARGET_DEVICE
           fi
           
           echo "✅ Kernel build complete."
