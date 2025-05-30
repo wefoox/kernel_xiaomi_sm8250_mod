@@ -85,14 +85,14 @@ jobs:
         run: |
           cd kernel_source
           chmod +x build.sh
+          export TOOLCHAIN_PATH=$HOME/proton-clang/proton-clang-20210522/bin
           TARGET_DEVICE="${{ github.event.inputs.target_device }}"
           KERNELSU_ENABLED="${{ github.event.inputs.kernelsu_enabled }}"
           if [ "$KERNELSU_ENABLED" == "Yes" ]; then
-            TOOLCHAIN_PATH=$HOME/proton-clang/proton-clang-20210522/bin bash build.sh $TARGET_DEVICE ksu
+            bash build.sh $TARGET_DEVICE ksu
           else
-            TOOLCHAIN_PATH=$HOME/proton-clang/proton-clang-20210522/bin bash build.sh $TARGET_DEVICE
+            bash build.sh $TARGET_DEVICE
           fi
-          echo "✅ Kernel build complete."
 
       - name: 📦 Package kernel into AnyKernel3
         run: |
