@@ -39,34 +39,13 @@ on:
           - 'AOSP'
 
 jobs:
-  prepare:
+  build:
     runs-on: ubuntu-latest
-    outputs:
-      cache-hit-toolchain: ${{ steps.cache-toolchain.outputs.cache-hit }}
     steps:
       - name: 📦 Setting up build environment
         run: |
-          echo "Setting up build environment..."
           sudo apt update && sudo apt install -y \
             build-essential git curl wget bison flex zip bc cpio libssl-dev ccache python-is-python3
-          echo "✅ Build environment setup complete."
-
-      - name: 📥 Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ccache
-          key: ccache-${{ github.event.inputs.target_device }}-${{ github.event.inputs.compiled_system }}
-          restore-keys: |
-            ccache-${{ github.event.inputs.target_device }}-
-            ccache-
-
-      - name: ⚙️ Configure ccache
-        run: |
-          mkdir -p ~/.cache/ccache
-          ccache --max-size=5G
-          ccache --set-config=compression=true
-          ccache --zero-stats
-          echo "CCACHE_DIR=$HOME/.cache/ccache" >> $GITHUB_ENV
 
       - name: 📥 Cache toolchain
         id: cache-toolchain
@@ -77,50 +56,27 @@ jobs:
           restore-keys: |
             toolchain-
 
-      - name: 📥 Download Proton Clang toolchain
+      - name: 📥 Download Proton Clang toolchain (if needed)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
-          echo "Downloading Proton Clang toolchain..."
           mkdir -p $HOME/proton-clang
           cd $HOME/proton-clang
           wget -q https://github.com/kdrag0n/proton-clang/archive/refs/tags/20210522.zip
           unzip 20210522.zip
-          echo "✅ Proton Clang toolchain download complete."
+          cd ~
 
       - name: 🔍 Verify Proton Clang toolchain
         run: |
           if [ ! -d "$HOME/proton-clang/proton-clang-20210522/bin" ]; then
             echo "❌ Proton Clang toolchain path does not exist."
+            ls -l $HOME/proton-clang
             exit 1
           else
             echo "✅ Proton Clang toolchain verified successfully."
           fi
 
-  build:
-    needs: prepare
-    runs-on: ubuntu-latest
-    steps:
-      - name: 📥 Restore toolchain cache
-        uses: actions/cache@v3
-        with:
-          path: $HOME/proton-clang
-          key: toolchain-proton-clang
-          restore-keys: |
-            toolchain-
-            
-      - name: 🚀 Maximize build space (最大化构建空间)
-        uses: easimon/maximize-build-space@master
-        with:
-          root-reserve-mb: 8192
-          temp-reserve-mb: 2048
-          swap-size-mb: 8192
-          remove-dotnet: "true"
-          remove-android: "true"
-          remove-haskell: "true"
-          remove-codeql: "true"
-          
       - name: 📥 Checkout kernel source
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: weekdaycare/kernel_xiaomi_sm8250_mod
           path: kernel_source
@@ -129,43 +85,24 @@ jobs:
         run: |
           cd kernel_source
           chmod +x build.sh
-          
           TARGET_DEVICE="${{ github.event.inputs.target_device }}"
           KERNELSU_ENABLED="${{ github.event.inputs.kernelsu_enabled }}"
-          SYSTEM="${{ github.event.inputs.compiled_system }}"
-          
           if [ "$KERNELSU_ENABLED" == "Yes" ]; then
             TOOLCHAIN_PATH=$HOME/proton-clang/proton-clang-20210522/bin bash build.sh $TARGET_DEVICE ksu
           else
             TOOLCHAIN_PATH=$HOME/proton-clang/proton-clang-20210522/bin bash build.sh $TARGET_DEVICE
           fi
-          
           echo "✅ Kernel build complete."
 
       - name: 📦 Package kernel into AnyKernel3
         run: |
           cd kernel_source
-          OUTPUT_ZIP=$(ls *.zip | grep "$TARGET_DEVICE")
+          OUTPUT_ZIP=$(ls *.zip | grep "${{ github.event.inputs.target_device }}")
           echo "Packaging kernel into AnyKernel3..."
           echo "Generated package: $OUTPUT_ZIP"
-          echo "✅ Packaging complete."
 
       - name: 📤 Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: AK3-Kernel-${{ github.event.inputs.target_device }}
           path: kernel_source/*.zip
-
-      - name: 📊 Save ccache statistics
-        run: |
-          echo "📊 CCache Statistics:"
-          ccache --show-stats
-
-      - name: 📥 Save ccache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ccache
-          key: ccache-${{ github.event.inputs.target_device }}-${{ github.event.inputs.compiled_system }}
-          restore-keys: |
-            ccache-${{ github.event.inputs.target_device }}-
-            ccache-
