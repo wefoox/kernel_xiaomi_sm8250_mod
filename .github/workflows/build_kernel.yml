@@ -3,143 +3,53 @@ name: Build AK3 Kernel
 on:
   workflow_dispatch:
     inputs:
-      device:
-        description: 'Target device (如: umi, lmi, cmi, all)'
+      target_device:
+        description: 'Target device code (e.g., lmi, umi)'
         required: true
         default: 'pipa'
-        type: choice
-        options:
-          - umi
-          - lmi
-          - cmi
-          - pipa
-          - all
-      system:
-        description: '系统类型 (AOSP or MIUI)'
+      enable_kernelsu:
+        description: 'Enable KernelSU (yes/no)'
         required: true
-        default: 'MIUI'
-        type: choice
-        options:
-          - AOSP
-          - MIUI
-      kernelsu:
-        description: '是否启用 KernelSU'
-        required: true
-        default: 'off'
-        type: choice
-        options:
-          - off
-          - on
+        default: 'yes'
 
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - id: set-matrix
-        run: |
-          if [ "${{ github.event.inputs.device }}" = "all" ]; then
-            DEVICES='["umi","lmi","cmi","pipa"]'
-          else
-            DEVICES='["'${{ github.event.inputs.device }}'"]'
-          fi
-          echo "matrix={\"device\":$DEVICES}" >> $GITHUB_OUTPUT
-
   build:
-    needs: prepare
     runs-on: ubuntu-latest
-    strategy:
-      matrix: ${{fromJson(needs.prepare.outputs.matrix)}}
-      fail-fast: false
-    env:
-      TOOLCHAIN_DIR: ${{ github.workspace }}/proton-clang/proton-clang-20210522/bin
-      CCACHE_DIR: ${{ github.workspace }}/.cache/ccache_mikernel
-      DEVICE: ${{ matrix.device }}
-      KERNELSU_ARG: ${{ github.event.inputs.kernelsu == 'on' && 'ksu' || '' }}
 
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
-      - name: Install build dependencies
+      - name: Set up dependencies
         run: |
           sudo apt update
-          sudo apt install -y build-essential git curl wget bison flex zip bc cpio libssl-dev ccache python-is-python3 tree
+          sudo apt install -y build-essential git curl wget bison flex zip bc cpio libssl-dev ccache python-is-python3
 
-      - name: Cache ccache
-        uses: actions/cache@v4
-        with:
-          path: .cache/ccache_mikernel
-          key: ccache-${{ matrix.device }}-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ matrix.device }}-
-            ccache-
-
-      - name: Cache proton-clang toolchain
-        id: cache-toolchain
-        uses: actions/cache@v4
-        with:
-          path: proton-clang
-          key: proton-clang-20210522
-
-      - name: Download proton-clang if not cached
-        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+      - name: Set up toolchain
         run: |
-          mkdir -p proton-clang
-          cd proton-clang
+          mkdir -p $HOME/proton-clang
+          cd $HOME/proton-clang
           wget https://github.com/kdrag0n/proton-clang/archive/refs/tags/20210522.zip
           unzip 20210522.zip
           cd ..
 
-      - name: Show toolchain version
+      - name: Build Kernel
         run: |
-          ${{ env.TOOLCHAIN_DIR }}/clang --version
+          bash build.sh ${{ github.event.inputs.target_device }} ${{ github.event.inputs.enable_kernelsu }}
 
-      - name: Build kernel for ${{ matrix.device }}
-        run: |
-          chmod +x build.sh
-          bash build.sh $DEVICE $KERNELSU_ARG | tee build_${DEVICE}.log
-
-      - name: Find built zips
-        run: |
-          ls -lh ./*.zip || true
-
-      - name: Upload kernel zip
-        uses: actions/upload-artifact@v4
+      - name: Archive artifacts
+        uses: actions/upload-artifact@v3
         with:
-          name: AK3-Kernel-${{ matrix.device }}-${{ github.event.inputs.system }}${{ github.event.inputs.kernelsu == 'on' && '-KernelSU' || '' }
-          path: ./*.zip
+          name: kernel-${{ github.event.inputs.target_device }}
+          path: |
+            out/arch/arm64/boot/Image
+            out/arch/arm64/boot/dtb
+            anykernel/*.zip
 
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: out
-
-      - name: Prepare release files
+      - name: Clean up
         run: |
-          mkdir -p release
-          find out -name '*.zip' -exec mv {} release/ \;
-          echo "RELEASE_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: release/*.zip
-          name: AK3-Kernel-${{ github.event.inputs.device }}-${{ github.event.inputs.system }}-${{ github.event.inputs.kernelsu == 'on' && 'KernelSU-' || '' }}${{ env.RELEASE_DATE }}
-          tag_name: AK3-Kernel-${{ github.event.inputs.device }}-${{ github.event.inputs.system }}-${{ github.event.inputs.kernelsu == 'on' && 'KernelSU-' || '' }}${{ env.RELEASE_DATE }}
-          body: |
-            # AK3 Kernel Build
-            - **Device:** ${{ github.event.inputs.device }}
-            - **System:** ${{ github.event.inputs.system }}
-            - **KernelSU:** ${{ github.event.inputs.kernelsu }}
-            - **Build Date:** ${{ env.RELEASE_DATE }}
-            - **Build Log:** See Actions run for details.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          rm -rf out/
+          rm -rf anykernel/
+          echo "Clean up done."
