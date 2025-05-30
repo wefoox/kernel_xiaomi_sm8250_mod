@@ -53,7 +53,6 @@ jobs:
           cd ~/proton-clang
           wget https://github.com/kdrag0n/proton-clang/archive/refs/tags/20210522.zip
           unzip 20210522.zip
-          mv proton-clang-20210522 proton-clang-20210522
           rm 20210522.zip
 
       - name: Show build info
