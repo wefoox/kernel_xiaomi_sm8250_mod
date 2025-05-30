@@ -3,53 +3,127 @@ name: Build AK3 Kernel
 on:
   workflow_dispatch:
     inputs:
-      target_device:
-        description: 'Target device code (e.g., lmi, umi)'
+      device:
+        description: 'Target device (如 lmi, umi, cmi, ...)'
         required: true
-        default: 'pipa'
-      enable_kernelsu:
-        description: 'Enable KernelSU (yes/no)'
+        default: 'lmi'
+      kernelsu:
+        description: '是否启用 KernelSU (填写 ksu 则启用, 否则留空)'
+        required: false
+        default: ''
+      build_type:
+        description: '构建类型'
         required: true
-        default: 'yes'
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
+      - name: Checkout source code
+        uses: actions/checkout@v4
 
-      - name: Set up dependencies
+      - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y build-essential git curl wget bison flex zip bc cpio libssl-dev ccache python-is-python3
 
-      - name: Set up toolchain
+      - name: Prepare ccache
         run: |
-          mkdir -p $HOME/proton-clang
-          cd $HOME/proton-clang
+          mkdir -p $HOME/.cache/ccache_mikernel
+          ccache --max-size=3G
+          ccache --zero-stats
+
+      - name: Cache proton-clang toolchain
+        id: cache-clang
+        uses: actions/cache@v4
+        with:
+          path: ~/proton-clang
+          key: proton-clang-20210522
+
+      - name: Download proton-clang toolchain (if not cached)
+        if: steps.cache-clang.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/proton-clang
+          cd ~/proton-clang
           wget https://github.com/kdrag0n/proton-clang/archive/refs/tags/20210522.zip
           unzip 20210522.zip
-          cd ..
+          mv proton-clang-20210522 proton-clang-20210522
+          rm 20210522.zip
 
-      - name: Build Kernel
+      - name: Show build info
         run: |
-          bash build.sh ${{ github.event.inputs.target_device }} ${{ github.event.inputs.enable_kernelsu }}
+          echo "Target device: ${{ github.event.inputs.device }}"
+          echo "KernelSU: ${{ github.event.inputs.kernelsu }}"
+          echo "Build type: ${{ github.event.inputs.build_type }}"
 
-      - name: Archive artifacts
-        uses: actions/upload-artifact@v3
+      - name: Build kernel (AOSP+MIUI)
+        env:
+          CCACHE_DIR: $HOME/.cache/ccache_mikernel
+        run: |
+          set -e
+          chmod +x build.sh
+
+          # 先清理历史产物
+          rm -rf out/ anykernel/ *.zip
+
+          # 构建参数
+          DEVICE="${{ github.event.inputs.device }}"
+          KSU="${{ github.event.inputs.kernelsu }}"
+          # 调用脚本。第二参数填写 ksu 启用 KernelSU
+          if [ -z "$KSU" ]; then
+            bash build.sh "$DEVICE"
+          else
+            bash build.sh "$DEVICE" ksu
+          fi
+
+      - name: List output
+        run: ls -lh *.zip || true
+
+      - name: Upload kernel zip (AOSP/MIUI)
+        uses: actions/upload-artifact@v4
         with:
-          name: kernel-${{ github.event.inputs.target_device }}
+          name: AK3-Kernel-${{ github.event.inputs.device }}-${{ github.run_number }}
           path: |
-            out/arch/arm64/boot/Image
-            out/arch/arm64/boot/dtb
-            anykernel/*.zip
+            *.zip
 
-      - name: Clean up
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: out
+
+      - name: Prepare release note
+        id: prep
         run: |
-          rm -rf out/
-          rm -rf anykernel/
-          echo "Clean up done."
+          cd out
+          files=$(find . -type f -name "*.zip" | xargs -n1 basename | tr '\n' ' ')
+          echo "FILES=$files" >> $GITHUB_ENV
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: out/**/*.zip
+          name: AK3 Kernel ${{ github.event.inputs.device }} ${{ github.event.inputs.kernelsu }} ${{ github.run_number }}
+          tag_name: AK3-${{ github.event.inputs.device }}-${{ github.run_number }}
+          body: |
+            ### 构建信息
+            - 设备: ${{ github.event.inputs.device }}
+            - KernelSU: ${{ github.event.inputs.kernelsu }}
+            - 构建类型: ${{ github.event.inputs.build_type }}
+            - 包含: ${{ env.FILES }}
+            - 构建时间: ${{ github.run_started_at }}
+            - 触发: ${{ github.actor }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
