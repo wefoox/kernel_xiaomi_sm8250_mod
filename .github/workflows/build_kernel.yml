@@ -1,40 +1,49 @@
-name: Build AK3 Kernel Package
+name: Build AK3 Kernel
 
 on:
   workflow_dispatch:
     inputs:
-      target_device:
-        description: 'Target device (如 lmi, umi, all)'
+      device:
+        description: 'Target device (如: umi, lmi, cmi, all)'
         required: true
-        default: 'lmi'
+        default: 'pipa'
         type: choice
         options:
-          - 'umi'
-          - 'cmi'
-          - 'cas'
-          - 'thyme'
-          - 'munch'
-          - 'dagu'
-          - 'elish'
-          - 'enuma'
-          - 'alioth'
-          - 'apollo'
-          - 'lmi'
-          - 'psyche'
-          - 'pipa'
-          - 'all'
+          - umi
+          - lmi
+          - cmi
+          - all
+      system:
+        description: '系统类型 (AOSP or MIUI)'
+        required: true
+        default: 'AOSP'
+        type: choice
+        options:
+          - AOSP
+          - MIUI
       kernelsu:
-        description: '是否集成KernelSU'
+        description: '是否启用 KernelSU'
         required: true
-        default: 'false'
+        default: 'off'
         type: choice
         options:
-          - 'true'
-          - 'false'
+          - off
+          - on
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        device: ${{ fromJson(github.event.inputs.device == 'all' && '["umi","lmi","cmi"]' || '["' + github.event.inputs.device + '"]') }}
+    env:
+      TOOLCHAIN_DIR: ${{ github.workspace }}/proton-clang/proton-clang-20210522/bin
+      CCACHE_DIR: ${{ github.workspace }}/.cache/ccache_mikernel
+      BUILD_DIR: ${{ github.workspace }}
+      KERNELSU_ARG: ${{ github.event.inputs.kernelsu == 'on' && 'ksu' || '' }}
+      SYSTEM_ARG: ${{ github.event.inputs.system }}
+      DEVICE: ${{ matrix.device }}
+
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -42,50 +51,85 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt update
-          sudo apt install -y build-essential git curl wget bison flex zip bc cpio libssl-dev ccache python-is-python3
-
-      - name: Prepare ccache
-        run: |
-          mkdir -p $HOME/.cache/ccache_mikernel
-          ccache --max-size=4G
-          ccache --zero-stats
+          sudo apt install -y build-essential git curl wget bison flex zip bc cpio libssl-dev ccache python-is-python3 tree
 
       - name: Cache ccache
         uses: actions/cache@v4
         with:
-          path: ~/.cache/ccache_mikernel
-          key: ccache-${{ github.sha }}
+          path: .cache/ccache_mikernel
+          key: ccache-${{ env.DEVICE }}-${{ github.sha }}
           restore-keys: |
+            ccache-${{ env.DEVICE }}-
             ccache-
 
-      - name: Download Proton Clang toolchain
+      - name: Download proton-clang toolchain
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: proton-clang
+          key: proton-clang-20210522
+      - name: Fetch proton-clang if not cached
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
-          mkdir -p /home/runner/proton-clang
-          cd /home/runner/proton-clang
+          mkdir -p proton-clang
+          cd proton-clang
           wget https://github.com/kdrag0n/proton-clang/archive/refs/tags/20210522.zip
           unzip 20210522.zip
+          mv proton-clang-20210522 proton-clang-20210522
+          ls proton-clang-20210522/bin
           cd ..
 
-      - name: Build Kernel
+      - name: Show toolchain version
         run: |
-          if [ "${{ github.event.inputs.target_device }}" = "all" ]; then
-            bash buildall.sh $([ "${{ github.event.inputs.kernelsu }}" = "true" ] && echo "ksu")
-          else
-            bash build.sh ${{ github.event.inputs.target_device }} $([ "${{ github.event.inputs.kernelsu }}" = "true" ] && echo "ksu")
-          fi
+          ${{ env.TOOLCHAIN_DIR }}/clang --version
 
-      - name: Prepare AK3 package
+      - name: Build kernel for ${{ env.DEVICE }}
         run: |
-          mkdir -p ak3_out
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ak3
-          # 假设build.sh输出Image在out/arch/arm64/boot/Image
-          cp out/arch/arm64/boot/Image ak3/
-          cd ak3
-          zip -r ../ak3_out/${{ github.event.inputs.target_device }}-kernel-ak3-$(date +%Y%m%d).zip .
-          cd ..
+          chmod +x build.sh
+          echo "::group::Build log"
+          bash build.sh $DEVICE $KERNELSU_ARG | tee build_${DEVICE}.log
+          echo "::endgroup::"
 
-      - name: Upload AK3 kernel zip
+      - name: Find built zips
+        id: find-zip
+        run: |
+          ls -lh ./*.zip || true
+
+      - name: Upload kernel zip
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.inputs.target_device }}-kernel-ak3
-          path: ak3_out/*.zip
+          name: AK3-Kernel-${{ env.DEVICE }}-${{ github.event.inputs.system }}${{ github.event.inputs.kernelsu == 'on' && '-KernelSU' || '' }
+          path: ./*.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: out
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          find out -name '*.zip' -exec mv {} release/ \;
+          echo "RELEASE_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/*.zip
+          name: AK3-Kernel-${{ github.event.inputs.device }}-${{ github.event.inputs.system }}-${{ github.event.inputs.kernelsu == 'on' && 'KernelSU-' || '' }}${{ env.RELEASE_DATE }}
+          tag_name: AK3-Kernel-${{ github.event.inputs.device }}-${{ github.event.inputs.system }}-${{ github.event.inputs.kernelsu == 'on' && 'KernelSU-' || '' }}${{ env.RELEASE_DATE }}
+          body: |
+            # AK3 Kernel Build
+            - **Device:** ${{ github.event.inputs.device }}
+            - **System:** ${{ github.event.inputs.system }}
+            - **KernelSU:** ${{ github.event.inputs.kernelsu }}
+            - **Build Date:** ${{ env.RELEASE_DATE }}
+            - **Build Log:** See Actions run for details.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
