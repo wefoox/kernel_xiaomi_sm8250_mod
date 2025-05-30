@@ -1,127 +1,146 @@
-name: Build AK3 Kernel
+name: Build AK3 Kernel Package
 
 on:
   workflow_dispatch:
     inputs:
-      device:
-        description: 'Target device (如 lmi, umi, cmi, ...)'
+      target_device:
+        description: 'Target device (目标设备)'
         required: true
-        default: 'lmi'
-      kernelsu:
-        description: '是否启用 KernelSU (填写 ksu 则启用, 否则留空)'
-        required: false
-        default: ''
-      build_type:
-        description: '构建类型'
-        required: true
-        default: 'Release'
         type: choice
         options:
-          - Release
-          - Debug
+          - 'umi'
+          - 'cmi'
+          - 'cas'
+          - 'thyme'
+          - 'munch'
+          - 'dagu'
+          - 'elish'
+          - 'enuma'
+          - 'alioth'
+          - 'apollo'
+          - 'lmi'
+          - 'psyche'
+          - 'pipa'
+      kernelsu_enabled:
+        description: 'Enable KernelSU (是否启用 KernelSU)'
+        required: true
+        type: choice
+        default: 'Yes'
+        options:
+          - 'Yes'
+          - 'No'
+      compiled_system:
+        description: 'Compiled system type (适用系统类型)'
+        required: true
+        type: choice
+        default: 'MIUI'
+        options:
+          - 'MIUI'
+          - 'AOSP'
 
 jobs:
-  build:
+  prepare:
     runs-on: ubuntu-latest
-
+    outputs:
+      cache-hit-toolchain: ${{ steps.cache-toolchain.outputs.cache-hit }}
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
+      - name: 📦 Setting up build environment
         run: |
-          sudo apt update
-          sudo apt install -y build-essential git curl wget bison flex zip bc cpio libssl-dev ccache python-is-python3
+          echo "Setting up build environment..."
+          sudo apt update && sudo apt install -y \
+            build-essential git curl wget bison flex zip bc cpio libssl-dev ccache python-is-python3
+          echo "✅ Build environment setup complete."
 
-      - name: Prepare ccache
+      - name: 📥 Restore ccache
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ github.event.inputs.target_device }}-${{ github.event.inputs.compiled_system }}
+          restore-keys: |
+            ccache-${{ github.event.inputs.target_device }}-
+            ccache-
+
+      - name: ⚙️ Configure ccache
         run: |
-          mkdir -p $HOME/.cache/ccache_mikernel
-          ccache --max-size=3G
+          mkdir -p ~/.cache/ccache
+          ccache --max-size=5G
+          ccache --set-config=compression=true
           ccache --zero-stats
+          echo "CCACHE_DIR=$HOME/.cache/ccache" >> $GITHUB_ENV
 
-      - name: Cache proton-clang toolchain
-        id: cache-clang
-        uses: actions/cache@v4
+      - name: 📥 Cache toolchain
+        id: cache-toolchain
+        uses: actions/cache@v3
         with:
-          path: ~/proton-clang
-          key: proton-clang-20210522
+          path: $HOME/proton-clang
+          key: toolchain-proton-clang
+          restore-keys: |
+            toolchain-
 
-      - name: Download proton-clang toolchain (if not cached)
-        if: steps.cache-clang.outputs.cache-hit != 'true'
+      - name: 📥 Download Proton Clang toolchain
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
-          mkdir -p ~/proton-clang
-          cd ~/proton-clang
-          wget https://github.com/kdrag0n/proton-clang/archive/refs/tags/20210522.zip
+          echo "Downloading Proton Clang toolchain..."
+          mkdir -p $HOME/proton-clang
+          cd $HOME/proton-clang
+          wget -q https://github.com/kdrag0n/proton-clang/archive/refs/tags/20210522.zip
           unzip 20210522.zip
-          rm 20210522.zip
+          echo "✅ Proton Clang toolchain download complete."
 
-      - name: Show build info
-        run: |
-          echo "Target device: ${{ github.event.inputs.device }}"
-          echo "KernelSU: ${{ github.event.inputs.kernelsu }}"
-          echo "Build type: ${{ github.event.inputs.build_type }}"
-
-      - name: Build kernel (AOSP+MIUI)
-        env:
-          CCACHE_DIR: $HOME/.cache/ccache_mikernel
-          TOOLCHAIN_PATH: $HOME/proton-clang/proton-clang-20210522/bin
-        run: |
-          set -e
-          chmod +x build.sh
-      
-          DEVICE="${{ github.event.inputs.device }}"
-          KSU="${{ github.event.inputs.kernelsu }}"
-      
-          # 临时加PATH，仅在build.sh调用时生效
-          if [ -z "$KSU" ]; then
-            PATH="$TOOLCHAIN_PATH:$PATH" bash build.sh "$DEVICE"
-          else
-            PATH="$TOOLCHAIN_PATH:$PATH" bash build.sh "$DEVICE" ksu
-          fi
-
-
-      - name: List output
-        run: ls -lh *.zip || true
-
-      - name: Upload kernel zip (AOSP/MIUI)
-        uses: actions/upload-artifact@v4
-        with:
-          name: AK3-Kernel-${{ github.event.inputs.device }}-${{ github.run_number }}
-          path: |
-            *.zip
-
-  release:
-    needs: build
+  build:
+    needs: prepare
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
-    permissions:
-      contents: write
+    env:
+      TOOLCHAIN_PATH: $HOME/proton-clang/proton-clang-20210522/bin
+
     steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
+      - name: 📥 Checkout kernel source
+        uses: actions/checkout@v3
         with:
-          path: out
+          repository: yspbwx2010/kernel_xiaomi_sm8250_mod
+          path: kernel_source
 
-      - name: Prepare release note
-        id: prep
+      - name: 🔨 Build kernel
         run: |
-          cd out
-          files=$(find . -type f -name "*.zip" | xargs -n1 basename | tr '\n' ' ')
-          echo "FILES=$files" >> $GITHUB_ENV
+          cd kernel_source
+          chmod +x build.sh
+          
+          TARGET_DEVICE="${{ github.event.inputs.target_device }}"
+          KERNELSU_ENABLED="${{ github.event.inputs.kernelsu_enabled }}"
+          SYSTEM="${{ github.event.inputs.compiled_system }}"
+          
+          if [ "$KERNELSU_ENABLED" == "Yes" ]; then
+            bash build.sh $TARGET_DEVICE ksu
+          else
+            bash build.sh $TARGET_DEVICE
+          fi
+          
+          echo "✅ Kernel build complete."
 
-      - name: Release
-        uses: softprops/action-gh-release@v1
+      - name: 📦 Package kernel into AnyKernel3
+        run: |
+          cd kernel_source
+          OUTPUT_ZIP=$(ls *.zip | grep "$TARGET_DEVICE")
+          echo "Packaging kernel into AnyKernel3..."
+          echo "Generated package: $OUTPUT_ZIP"
+          echo "✅ Packaging complete."
+
+      - name: 📤 Upload build artifacts
+        uses: actions/upload-artifact@v3
         with:
-          files: out/**/*.zip
-          name: AK3 Kernel ${{ github.event.inputs.device }} ${{ github.event.inputs.kernelsu }} ${{ github.run_number }}
-          tag_name: AK3-${{ github.event.inputs.device }}-${{ github.run_number }}
-          body: |
-            ### 构建信息
-            - 设备: ${{ github.event.inputs.device }}
-            - KernelSU: ${{ github.event.inputs.kernelsu }}
-            - 构建类型: ${{ github.event.inputs.build_type }}
-            - 包含: ${{ env.FILES }}
-            - 构建时间: ${{ github.run_started_at }}
-            - 触发: ${{ github.actor }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: AK3-Kernel-${{ github.event.inputs.target_device }}
+          path: kernel_source/*.zip
+
+      - name: 📊 Save ccache statistics
+        run: |
+          echo "📊 CCache Statistics:"
+          ccache --show-stats
+
+      - name: 📥 Save ccache
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ github.event.inputs.target_device }}-${{ github.event.inputs.compiled_system }}
+          restore-keys: |
+            ccache-${{ github.event.inputs.target_device }}-
+            ccache-
