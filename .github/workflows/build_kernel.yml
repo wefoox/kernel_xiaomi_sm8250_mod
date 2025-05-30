@@ -85,20 +85,20 @@ jobs:
           cd $HOME/proton-clang
           wget -q https://github.com/kdrag0n/proton-clang/archive/refs/tags/20210522.zip
           unzip 20210522.zip
-          ls -R $HOME/proton-clang
+          mv proton-clang-20210522/* .
           echo "✅ Proton Clang toolchain download complete."
 
   build:
     needs: prepare
     runs-on: ubuntu-latest
     env:
-      TOOLCHAIN_PATH: $HOME/proton-clang/proton-clang-20210522/bin
+      TOOLCHAIN_PATH: $HOME/proton-clang/bin
 
     steps:
       - name: 📥 Checkout kernel source
         uses: actions/checkout@v3
         with:
-          repository: weekdaycare/kernel_xiaomi_sm8250_mod
+          repository: yspbwx2010/kernel_xiaomi_sm8250_mod
           path: kernel_source
 
       - name: 🔨 Build kernel
