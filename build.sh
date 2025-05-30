@@ -33,16 +33,6 @@ if [ ! -f "$TOOLCHAIN_PATH/clang" ]; then
     exit 1
 fi
 
-if ! command -v aarch64-linux-gnu-ld >/dev/null 2>&1; then
-    echo "[aarch64-linux-gnu-ld] does not exist, please check your environment."
-    exit 1
-fi
-
-if ! command -v arm-linux-gnueabi-ld >/dev/null 2>&1; then
-    echo "[arm-linux-gnueabi-ld] does not exist, please check your environment."
-    exit 1
-fi
-
 if ! command -v clang >/dev/null 2>&1; then
     echo "[clang] does not exist, please check your environment."
     exit 1
