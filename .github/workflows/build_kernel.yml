@@ -12,11 +12,12 @@ on:
           - umi
           - lmi
           - cmi
+          - pipa
           - all
       system:
         description: '系统类型 (AOSP or MIUI)'
         required: true
-        default: 'AOSP'
+        default: 'MIUI'
         type: choice
         options:
           - AOSP
