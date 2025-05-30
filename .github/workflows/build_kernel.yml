@@ -32,18 +32,31 @@ on:
           - on
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          if [ "${{ github.event.inputs.device }}" = "all" ]; then
+            DEVICES='["umi","lmi","cmi","pipa"]'
+          else
+            DEVICES='["'${{ github.event.inputs.device }}'"]'
+          fi
+          echo "matrix={\"device\":$DEVICES}" >> $GITHUB_OUTPUT
+
   build:
+    needs: prepare
     runs-on: ubuntu-latest
     strategy:
-      matrix:
-        device: ${{ fromJson(github.event.inputs.device == 'all' && '["umi","lmi","cmi"]' || '["' + github.event.inputs.device + '"]') }}
+      matrix: ${{fromJson(needs.prepare.outputs.matrix)}}
+      fail-fast: false
     env:
       TOOLCHAIN_DIR: ${{ github.workspace }}/proton-clang/proton-clang-20210522/bin
       CCACHE_DIR: ${{ github.workspace }}/.cache/ccache_mikernel
-      BUILD_DIR: ${{ github.workspace }}
-      KERNELSU_ARG: ${{ github.event.inputs.kernelsu == 'on' && 'ksu' || '' }}
-      SYSTEM_ARG: ${{ github.event.inputs.system }}
       DEVICE: ${{ matrix.device }}
+      KERNELSU_ARG: ${{ github.event.inputs.kernelsu == 'on' && 'ksu' || '' }}
 
     steps:
       - name: Checkout source
@@ -58,48 +71,44 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .cache/ccache_mikernel
-          key: ccache-${{ env.DEVICE }}-${{ github.sha }}
+          key: ccache-${{ matrix.device }}-${{ github.sha }}
           restore-keys: |
-            ccache-${{ env.DEVICE }}-
+            ccache-${{ matrix.device }}-
             ccache-
 
-      - name: Download proton-clang toolchain
+      - name: Cache proton-clang toolchain
         id: cache-toolchain
         uses: actions/cache@v4
         with:
           path: proton-clang
           key: proton-clang-20210522
-      - name: Fetch proton-clang if not cached
+
+      - name: Download proton-clang if not cached
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           mkdir -p proton-clang
           cd proton-clang
           wget https://github.com/kdrag0n/proton-clang/archive/refs/tags/20210522.zip
           unzip 20210522.zip
-          mv proton-clang-20210522 proton-clang-20210522
-          ls proton-clang-20210522/bin
           cd ..
 
       - name: Show toolchain version
         run: |
           ${{ env.TOOLCHAIN_DIR }}/clang --version
 
-      - name: Build kernel for ${{ env.DEVICE }}
+      - name: Build kernel for ${{ matrix.device }}
         run: |
           chmod +x build.sh
-          echo "::group::Build log"
           bash build.sh $DEVICE $KERNELSU_ARG | tee build_${DEVICE}.log
-          echo "::endgroup::"
 
       - name: Find built zips
-        id: find-zip
         run: |
           ls -lh ./*.zip || true
 
       - name: Upload kernel zip
         uses: actions/upload-artifact@v4
         with:
-          name: AK3-Kernel-${{ env.DEVICE }}-${{ github.event.inputs.system }}${{ github.event.inputs.kernelsu == 'on' && '-KernelSU' || '' }
+          name: AK3-Kernel-${{ matrix.device }}-${{ github.event.inputs.system }}${{ github.event.inputs.kernelsu == 'on' && '-KernelSU' || '' }
           path: ./*.zip
 
   release:
